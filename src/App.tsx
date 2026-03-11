@@ -16,11 +16,14 @@ function App() {
     { timestamp: '14:20:02', type: 'TASK_IDENTIFIED', message: 'Customer billing information required.' }
   ])
   const [cursorPos] = useState({ x: 450.21, y: 120.48 })
+  const [voiceLevel, setVoiceLevel] = useState(0)
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const captureInterval = useRef<number | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
 
   const addLog = useCallback((type: string, message: string) => {
     const time = new Date().toLocaleTimeString('en-GB', { hour12: false })
@@ -33,7 +36,10 @@ function App() {
     wsRef.current = ws
 
     ws.onopen = () => addLog('CORE_v2.0', 'Connection established with backend.')
-    ws.onclose = () => addLog('CORE_v2.0', 'Connection lost.')
+    ws.onclose = () => {
+      addLog('CORE_v2.0', 'Connection lost.')
+      stopVoiceHub()
+    }
     ws.onerror = () => addLog('ERROR', 'WebSocket connection failed.')
 
     ws.onmessage = (event) => {
@@ -86,6 +92,57 @@ function App() {
     stream?.getTracks().forEach(track => track.stop())
     setIsCapturing(false)
     addLog('VISION_LOOP', 'Visual stream terminated.')
+  }
+
+  const startVoiceHub = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioStreamRef.current = stream
+
+      const audioCtx = new AudioContext()
+      audioCtxRef.current = audioCtx
+
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyzer = audioCtx.createAnalyser()
+      analyzer.fftSize = 256
+      source.connect(analyzer)
+
+      const bufferLength = analyzer.frequencyBinCount
+      const dataArray = new Uint8Array(bufferLength)
+
+      const updateLevel = () => {
+        if (!audioCtxRef.current) return
+        analyzer.getByteFrequencyData(dataArray)
+        const average = dataArray.reduce((a, b) => a + b) / bufferLength
+        setVoiceLevel(average)
+
+        // Send audio data to backend (simulated chunks)
+        if (wsRef.current?.readyState === WebSocket.OPEN && average > 5) {
+          wsRef.current.send(JSON.stringify({
+            type: 'AUDIO',
+            data: Array.from(dataArray.slice(0, 50)), // Sampled
+            timestamp: Date.now()
+          }))
+        }
+
+        requestAnimationFrame(updateLevel)
+      }
+
+      updateLevel()
+      addLog('VOICE_HUB', 'Multimodal audio stream initialized.')
+    } catch (err) {
+      addLog('ERROR', 'Microphone access denied.')
+      console.error(err)
+    }
+  }
+
+  const stopVoiceHub = () => {
+    audioStreamRef.current?.getTracks().forEach(track => track.stop())
+    audioCtxRef.current?.close()
+    audioCtxRef.current = null
+    audioStreamRef.current = null
+    setVoiceLevel(0)
+    addLog('VOICE_HUB', 'Audio stream terminated.')
   }
 
   const captureFrame = () => {
@@ -279,11 +336,19 @@ function App() {
                 {[4, 8, 12, 14, 10, 6, 3, 5, 11, 15, 9, 5].map((h, i) => (
                   <div
                     key={i}
-                    className={`w-1 rounded-full bg-primary transition-all duration-300 ${isCapturing ? 'opacity-100 shadow-[0_0_8px_rgba(204,255,0,0.5)]' : 'opacity-20'}`}
-                    style={{ height: `${(h / 16) * 100}%` }}
+                    className={`w-1 rounded-full bg-primary transition-all duration-75 ${voiceLevel > 0 ? 'opacity-100 shadow-[0_0_8px_rgba(204,255,0,0.5)]' : 'opacity-20'}`}
+                    style={{ height: `${Math.max(10, (h / 15) * voiceLevel)}%` }}
                   ></div>
                 ))}
               </div>
+            </div>
+            <div className="mt-4 flex flex-col items-center">
+              <button
+                onClick={voiceLevel > 0 ? stopVoiceHub : startVoiceHub}
+                className={`px-4 py-2 rounded-lg border text-[10px] font-bold tracking-widest uppercase transition-all ${voiceLevel > 0 ? 'bg-primary/20 border-primary text-primary shadow-[0_0_15px_rgba(204,255,0,0.2)]' : 'border-slate-700 text-slate-500 hover:border-slate-500'}`}
+              >
+                {voiceLevel > 0 ? 'Mute Interaction' : 'Activate Voice Hub'}
+              </button>
             </div>
           </div>
 
