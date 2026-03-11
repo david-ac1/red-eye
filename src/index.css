@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #ccff00;
+  --color-background-light: #f8f8f5;
+  --color-background-dark: #0a0b04;
+  --color-surface-dark: #16180a;
+  --color-border-dark: #2a2e14;
+
+  --font-display: "Inter", sans-serif;
+
+  --radius-default: 0.25rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+}
+
+@layer base {
+  body {
+    @apply bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display;
+  }
+}
+
+.cyber-grid {
+  background-image: radial-gradient(circle, #ccff0022 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
+.scanline {
+  background: linear-gradient(to bottom, transparent 50%, rgba(204, 255, 0, 0.05) 50%);
+  background-size: 100% 4px;
+}
