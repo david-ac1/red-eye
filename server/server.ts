@@ -1,21 +1,47 @@
 import express from 'express';
 import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
-// Note: Google ADK imports will go here
-// import { AgentSession } from '@google/adk'; 
+import { WebSocketServer, WebSocket } from 'ws';
 
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-const PORT = process.env.PORT || 3001;
+const PORT = 3001;
 
-wss.on('connection', (ws) => {
+// Mock ADK Signal Handler
+const handleAgentLogic = async (frameData: string) => {
+    // In a real implementation, this would send the frame to Gemini Live API
+    // and receive tool calls via the ADK.
+    if (frameData.length > 0) {
+        console.log('[ADK] Processing frame analysis...');
+        // Example response simulation
+        return {
+            type: 'ACTION',
+            message: 'Analyzed billing form. Identifying CVV field.'
+        };
+    }
+    return null;
+};
+
+wss.on('connection', (ws: WebSocket) => {
     console.log('Client connected to Red-Eye Agent');
 
-    ws.on('message', (message) => {
-        console.log('Received message from client:', message.toString());
-        // Handle real-time communication with Gemini Live API via ADK
+    ws.on('message', async (message: string) => {
+        try {
+            const payload = JSON.parse(message);
+
+            if (payload.type === 'FRAME') {
+                // Handle incoming frame
+                const result = await handleAgentLogic(payload.data);
+
+                // Echo back to client for terminal update
+                if (result) {
+                    ws.send(JSON.stringify(result));
+                }
+            }
+        } catch (err) {
+            console.error('Error processing message:', err);
+        }
     });
 
     ws.on('close', () => {
