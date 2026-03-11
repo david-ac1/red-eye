@@ -25,13 +25,15 @@ const handleAgentLogic = async (frameData: string) => {
 };
 
 wss.on('connection', (ws: WebSocket) => {
-    console.log('Client connected to Red-Eye Agent');
+    const time = new Date().toISOString();
+    console.log(`[NET] Client connected at ${time}`);
 
     ws.on('message', async (message: string) => {
         try {
             const payload = JSON.parse(message.toString());
 
             if (payload.type === 'FRAME') {
+                console.log(`[STREAM] Received frame at ${new Date().toISOString()}`);
                 // Handle incoming frame
                 const result = await handleAgentLogic(payload.data);
 
@@ -61,6 +63,14 @@ wss.on('connection', (ws: WebSocket) => {
     });
 });
 
+process.on('uncaughtException', (err) => {
+    console.error('[CRITICAL] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 server.listen(PORT, () => {
-    console.log(`Red-Eye Backend running on http://localhost:${PORT}`);
+    console.log(`Red-Eye Backend running on Port ${PORT}`);
 });

@@ -31,34 +31,49 @@ function App() {
   }, [])
 
   useEffect(() => {
-    // Initialize WebSocket connection to backend
-    const ws = new WebSocket('ws://localhost:3001')
-    wsRef.current = ws
+    let ws: WebSocket;
+    let reconnectTimeout: number;
 
-    ws.onopen = () => addLog('CORE_v2.0', 'Connection established with backend.')
-    ws.onclose = () => {
-      addLog('CORE_v2.0', 'Connection lost.')
-      stopVoiceHub()
-    }
-    ws.onerror = () => addLog('ERROR', 'WebSocket connection failed.')
+    const connect = () => {
+      ws = new WebSocket('ws://127.0.0.1:3001')
+      wsRef.current = ws
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'ACTION') {
-          addLog('AGENT_ACTION', data.message)
-          // High-impact action simulation
-          if (data.message.includes('billing') || data.message.includes('CVV')) {
-            setPendingAction(data.message)
-            setShowConfirmation(true)
+      ws.onopen = () => {
+        addLog('CORE_v2.0', 'Connection established with backend.')
+      }
+
+      ws.onclose = () => {
+        addLog('CORE_v2.0', 'Connection lost. Attempting reconnect...')
+        stopVoiceHub()
+        reconnectTimeout = window.setTimeout(connect, 3000)
+      }
+
+      ws.onerror = (err) => {
+        addLog('ERROR', `WebSocket connection failed: ${err.type}`)
+        console.error('WS Error:', err)
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'ACTION') {
+            addLog('AGENT_ACTION', data.message)
+            if (data.message.includes('billing') || data.message.includes('CVV')) {
+              setPendingAction(data.message)
+              setShowConfirmation(true)
+            }
           }
+        } catch (e) {
+          console.error('Failed to parse WS message', e)
         }
-      } catch (e) {
-        console.error('Failed to parse WS message', e)
       }
     }
 
-    return () => ws.close()
+    connect()
+    return () => {
+      ws?.close()
+      clearTimeout(reconnectTimeout)
+    }
   }, [addLog])
 
   const startVisionLoop = async () => {
@@ -160,7 +175,11 @@ function App() {
           data: jpegData,
           timestamp: Date.now()
         }))
+        // Silent diagnostic point - usually removed after debugging
+        console.log('Frame sent to backend')
       }
+    } else if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      console.warn('Cannot capture frame: WebSocket NOT OPEN')
     }
   }
 

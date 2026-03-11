@@ -21,26 +21,30 @@ try {
 
 export const db = admin.apps.length ? admin.firestore() : null;
 
+let firestoreEnabled = true;
+
 export const saveLog = async (sessionID: string, log: any) => {
-    if (!db) return;
+    if (!db || !firestoreEnabled) return;
     try {
         await db.collection('sessions').doc(sessionID).collection('logs').add({
             ...log,
             serverTimestamp: admin.firestore.FieldValue.serverTimestamp()
         });
     } catch (err) {
-        console.error('[Database] Failed to save log:', err);
+        console.warn('[Database] Firestore API disabled or unavailable. Persistent logging suspended.', err.message);
+        firestoreEnabled = false;
     }
 };
 
 export const saveTask = async (sessionID: string, task: any) => {
-    if (!db) return;
+    if (!db || !firestoreEnabled) return;
     try {
         await db.collection('sessions').doc(sessionID).collection('tasks').add({
             ...task,
             serverTimestamp: admin.firestore.FieldValue.serverTimestamp()
         });
     } catch (err) {
-        console.error('[Database] Failed to save task:', err);
+        console.warn('[Database] Firestore API disabled or unavailable. Persistent logging suspended.', err.message);
+        firestoreEnabled = false;
     }
 };
