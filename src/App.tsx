@@ -17,6 +17,7 @@ function App() {
   ])
   const [cursorPos] = useState({ x: 450.21, y: 120.48 })
   const [voiceLevel, setVoiceLevel] = useState(0)
+  const [currentUrl, setCurrentUrl] = useState('https://secure-checkout.internal.sys/billing-v4')
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -24,6 +25,7 @@ function App() {
   const captureInterval = useRef<number | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
+  const handledActionsRef = useRef<Set<string>>(new Set())
 
   const addLog = useCallback((type: string, message: string) => {
     const time = new Date().toLocaleTimeString('en-GB', { hour12: false })
@@ -58,10 +60,18 @@ function App() {
           const data = JSON.parse(event.data)
           if (data.type === 'ACTION') {
             addLog('AGENT_ACTION', data.message)
-            if (data.message.includes('billing') || data.message.includes('CVV')) {
-              setPendingAction(data.message)
-              setShowConfirmation(true)
+            // Prevent double-triggering if modal is already open OR already handled
+            if (!handledActionsRef.current.has(data.message)) {
+              setShowConfirmation(prev => {
+                if (!prev && (data.message.includes('billing') || data.message.includes('CVV'))) {
+                  setPendingAction(data.message);
+                  return true;
+                }
+                return prev;
+              });
             }
+          } else if (data.type === 'URL_UPDATE') {
+            setCurrentUrl(data.url);
           }
         } catch (e) {
           console.error('Failed to parse WS message', e)
@@ -185,6 +195,9 @@ function App() {
 
   const handleConfirmAction = () => {
     addLog('USER_AUTH', 'Action manually confirmed by user.')
+    if (pendingAction) {
+      handledActionsRef.current.add(pendingAction)
+    }
     setShowConfirmation(false)
     setPendingAction(null)
     // Send approval back to backend
@@ -216,7 +229,11 @@ function App() {
             </div>
             <div className="flex gap-4">
               <button
-                onClick={() => setShowConfirmation(false)}
+                onClick={() => {
+                  if (pendingAction) handledActionsRef.current.add(pendingAction);
+                  setShowConfirmation(false);
+                  setPendingAction(null);
+                }}
                 className="flex-1 px-6 py-3 rounded-xl border border-slate-700 text-slate-400 font-bold hover:bg-slate-800 transition-all uppercase tracking-widest text-xs"
               >
                 Decline
@@ -279,18 +296,32 @@ function App() {
               <div className="size-2.5 rounded-full bg-yellow-500/20"></div>
               <div className="size-2.5 rounded-full bg-green-500/20"></div>
             </div>
-            <div className="flex-1 max-w-md mx-auto h-5 bg-background-dark/50 rounded text-[10px] flex items-center px-3 text-slate-500 font-mono">
-              https://secure-checkout.internal.sys/billing-v4
+            <div className="flex-1 max-w-md mx-auto h-5 bg-background-dark/50 rounded text-[10px] flex items-center px-3 text-slate-500 font-mono overflow-hidden whitespace-nowrap">
+              {currentUrl}
             </div>
           </div>
 
           <div className="flex-1 relative overflow-hidden cyber-grid">
-            <div className="absolute inset-0 flex items-center justify-center opacity-40 grayscale contrast-125">
-              <div
-                className="w-full h-full bg-cover bg-center"
-                style={{ backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuB2Z9W9gG18WHMNvUPjLCYZ5jMjAPkBgip2aJx7LP5SZymxmQ1m5F7X1rFHCM0p_jxTHM3qxKlI47uhTZKEcX8lFzAWQ-u1pBC_tiHEEz0EXuv-YHvIuXzqGIu1kic6BavFDCJlRCeMteRPprGd_qU7qEN1Yt3xUzsx81ojQ9hK_-dVU5hWVu-aQBVZ30brtH4RMC3EdwI86KtzNwyE4iJFKJ-3IBW3AW5xNtSJjoMHm_8DXq9cztnlbKeZJCvOmHSNJWGeddVLpuEc")' }}
-                aria-label="Browser Viewport"
-              />
+            <div className="absolute inset-0 flex items-center justify-center opacity-40 grayscale contrast-125 overflow-hidden">
+              {isCapturing ? (
+                <video
+                  autoPlay
+                  muted
+                  playsInline
+                  ref={(el) => {
+                    if (el && videoRef.current?.srcObject) {
+                      el.srcObject = videoRef.current.srcObject;
+                    }
+                  }}
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div
+                  className="w-full h-full bg-cover bg-center"
+                  style={{ backgroundImage: 'url("https://lh3.googleusercontent.com/aida-public/AB6AXuB2Z9W9gG18WHMNvUPjLCYZ5jMjAPkBgip2aJx7LP5SZymxmQ1m5F7X1rFHCM0p_jxTHM3qxKlI47uhTZKEcX8lFzAWQ-u1pBC_tiHEEz0EXuv-YHvIuXzqGIu1kic6BavFDCJlRCeMteRPprGd_qU7qEN1Yt3xUzsx81ojQ9hK_-dVU5hWVu-aQBVZ30brtH4RMC3EdwI86KtzNwyE4iJFKJ-3IBW3AW5xNtSJjoMHm_8DXq9cztnlbKeZJCvOmHSNJWGeddVLpuEc")' }}
+                  aria-label="Browser Viewport"
+                />
+              )}
             </div>
 
             <div className="absolute inset-0 pointer-events-none p-6">

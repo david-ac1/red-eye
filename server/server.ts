@@ -9,24 +9,10 @@ const wss = new WebSocketServer({ server });
 
 const PORT = 3001;
 
-// Mock ADK Signal Handler
-const handleAgentLogic = async (frameData: string) => {
-    // In a real implementation, this would send the frame to Gemini Live API
-    // and receive tool calls via the ADK.
-    if (frameData.length > 0) {
-        console.log('[ADK] Processing frame analysis...');
-        // Example response simulation
-        return {
-            type: 'ACTION',
-            message: 'Analyzed billing form. Identifying CVV field.'
-        };
-    }
-    return null;
-};
-
 wss.on('connection', (ws: WebSocket) => {
     const time = new Date().toISOString();
     console.log(`[NET] Client connected at ${time}`);
+    let actionSent = false;
 
     ws.on('message', async (message: string) => {
         try {
@@ -34,16 +20,33 @@ wss.on('connection', (ws: WebSocket) => {
 
             if (payload.type === 'FRAME') {
                 console.log(`[STREAM] Received frame at ${new Date().toISOString()}`);
-                // Handle incoming frame
-                const result = await handleAgentLogic(payload.data);
+
+                // Mock logic within connection scope
+                let result = null;
+                if (payload.data.length > 0 && !actionSent) {
+                    console.log('[ADK] Processing frame analysis...');
+                    actionSent = true;
+                    result = {
+                        type: 'ACTION',
+                        message: 'Analyzed billing form. Identifying CVV field.'
+                    };
+                }
 
                 // Persistence
                 await saveLog('session_alpha_1', { type: 'FRAME_PROCESSED', timestamp: Date.now() });
 
-                // Echo back to client for terminal update
+                // Echo back to client
                 if (result) {
                     ws.send(JSON.stringify(result));
                     await saveTask('session_alpha_1', result);
+                }
+
+                // Randomly simulate URL updates for demo feel
+                if (Math.random() > 0.9) {
+                    ws.send(JSON.stringify({
+                        type: 'URL_UPDATE',
+                        url: `https://navigator.internal.sys/analysis/${Math.floor(Math.random() * 1000)}`
+                    }));
                 }
             } else if (payload.type === 'AUDIO') {
                 // Process audio data (Bidi-streaming placeholder)
@@ -52,6 +55,8 @@ wss.on('connection', (ws: WebSocket) => {
             } else if (payload.type === 'CONFIRMATION') {
                 console.log('[SAFETY] User confirmed action:', payload.status);
                 await saveLog('session_alpha_1', { type: 'USER_CONFIRMATION', status: payload.status });
+                // Reset for demo purposes so it can trigger again on next focus
+                actionSent = false;
             }
         } catch (err) {
             console.error('Error processing message:', err);
