@@ -34,8 +34,12 @@ function App() {
 
   const playAudioChunk = (base64Data: string) => {
     try {
-      if (!audioCtxRef.current) return;
+      if (!audioCtxRef.current) {
+        console.warn("AudioContext not initialized, cannot play chunk");
+        return;
+      }
 
+      console.log(`[AUDIO] Playing incoming audio chunk (${base64Data.length} chars)`);
       const binaryString = window.atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
@@ -61,8 +65,11 @@ function App() {
   useEffect(() => {
     let ws: WebSocket;
     let reconnectTimeout: number;
+    let isCleanedUp = false;
 
     const connect = () => {
+      if (isCleanedUp) return;
+
       ws = new WebSocket('ws://127.0.0.1:3001')
       wsRef.current = ws
 
@@ -71,13 +78,17 @@ function App() {
       }
 
       ws.onclose = () => {
-        addLog('CORE_v2.0', 'Connection lost. Attempting reconnect...')
-        reconnectTimeout = window.setTimeout(connect, 3000)
+        if (!isCleanedUp) {
+          addLog('CORE_v2.0', 'Connection lost. Attempting reconnect...')
+          reconnectTimeout = window.setTimeout(connect, 3000)
+        }
       }
 
       ws.onerror = (err) => {
-        addLog('ERROR', `WebSocket connection failed: ${err.type}`)
-        console.error('WS Error:', err)
+        if (!isCleanedUp) {
+          addLog('ERROR', `WebSocket connection failed`)
+          console.error('WS Error:', err)
+        }
       }
 
       ws.onmessage = (event) => {
@@ -103,14 +114,26 @@ function App() {
     }
 
     connect()
+
     return () => {
-      ws?.close()
+      isCleanedUp = true;
+      if (ws) {
+        ws.onclose = null; // Prevent reconnect handler from firing during manual close
+        ws.close()
+      }
       clearTimeout(reconnectTimeout)
     }
   }, [addLog])
 
   const startVisionLoop = async () => {
     try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
+      }
+      if (audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume();
+      }
+
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: 1 },
         audio: false
@@ -118,12 +141,21 @@ function App() {
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream
+        videoRef.current.play().catch(e => console.error("Video play failed:", e))
         setIsCapturing(true)
         addLog('VISION_LOOP', 'Visual stream acquired at 1 FPS.')
 
         captureInterval.current = window.setInterval(() => {
           captureFrame()
         }, 1000)
+
+        setTimeout(() => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            const prompt = "I've just shared my screen. Please analyze the content, identify any factual claims being made, and use your verify_claim_with_search tool to fact-check them."
+            addLog('USER_QUERY', prompt)
+            wsRef.current.send(JSON.stringify({ type: 'TEXT', data: prompt }))
+          }
+        }, 2000)
       }
     } catch (err) {
       addLog('ERROR', 'Failed to acquire screen stream.')
@@ -202,10 +234,16 @@ function App() {
 
   const captureFrame = () => {
     if (videoRef.current && canvasRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+      const vw = videoRef.current.videoWidth;
+      const vh = videoRef.current.videoHeight;
+
+      // Prevent capturing if video stream hasn't fully attached or initialized its dimensions.
+      if (!vw || !vh) return;
+
       const context = canvasRef.current.getContext('2d')
       if (context) {
-        canvasRef.current.width = videoRef.current.videoWidth
-        canvasRef.current.height = videoRef.current.videoHeight
+        canvasRef.current.width = vw
+        canvasRef.current.height = vh
         context.drawImage(videoRef.current, 0, 0)
 
         const jpegData = canvasRef.current.toDataURL('image/jpeg', 0.5)
@@ -214,7 +252,6 @@ function App() {
           data: jpegData,
           timestamp: Date.now()
         }))
-        console.log('Frame sent to backend')
       }
     }
   }
@@ -231,8 +268,8 @@ function App() {
 
   return (
     <div className="flex flex-col h-full bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display selection:bg-primary selection:text-background-dark overflow-hidden h-screen relative">
-      <video ref={videoRef} autoPlay className="hidden" />
-      <canvas ref={canvasRef} className="hidden" />
+      <video ref={videoRef} autoPlay playsInline muted className="fixed opacity-0 pointer-events-none -z-50 w-full h-full object-cover" />
+      <canvas ref={canvasRef} className="fixed opacity-0 pointer-events-none -z-50" />
 
       {/* Confirmation Modal */}
       {showConfirmation && (
@@ -241,16 +278,16 @@ function App() {
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent animate-pulse"></div>
             <div className="flex items-center gap-4 mb-6">
               <div className="size-12 bg-red-500/20 rounded-lg flex items-center justify-center text-red-500">
-                <span className="material-symbols-outlined text-3xl font-bold animate-pulse">lock_person</span>
+                <span className="material-symbols-outlined text-3xl font-bold animate-pulse">fact_check</span>
               </div>
               <div>
-                <h3 className="text-xl font-bold tracking-tight text-white uppercase italic">Authenticity Warning</h3>
-                <p className="text-[10px] text-red-500/60 font-mono tracking-widest">SYNTHETIC_MEDIA_DETECTED</p>
+                <h3 className="text-xl font-bold tracking-tight text-white uppercase italic">Fact-Check Alert</h3>
+                <p className="text-[10px] text-red-500/60 font-mono tracking-widest">HALLUCINATED_CLAIM_DETECTED</p>
               </div>
             </div>
             <div className="p-4 bg-background-dark/50 rounded-xl border border-red-500/10 mb-8">
-              <p className="text-sm text-slate-400 font-mono mb-2">THREAT_IDENTIFIED:</p>
-              <p className="text-red-500 font-bold">{pendingAction || 'Analyzing generative artifacts...'}</p>
+              <p className="text-sm text-slate-400 font-mono mb-2">ALERT_DETAILS:</p>
+              <p className="text-red-500 font-bold">{pendingAction || 'Verifying claims...'}</p>
             </div>
             <div className="flex gap-4">
               <button
@@ -422,11 +459,11 @@ function App() {
             <div className="space-y-4">
               <div className="flex items-start gap-4 p-4 rounded-xl bg-primary/5 border border-primary/20">
                 <div className="mt-0.5 text-primary">
-                  <span className={`material-symbols-outlined text-lg ${isCapturing ? 'animate-spin' : ''}`}>security</span>
+                  <span className={`material-symbols-outlined text-lg ${isCapturing ? 'animate-spin' : ''}`}>fact_check</span>
                 </div>
                 <div>
-                  <h4 className="text-sm font-semibold text-primary">Multimodal Sentinel</h4>
-                  <p className="text-xs text-primary/70">{isCapturing ? 'Actively auditing vision/audio buffers...' : 'Sentinel Standby'}</p>
+                  <h4 className="text-sm font-semibold text-primary">Contextual Fact-Checker</h4>
+                  <p className="text-xs text-primary/70">{isCapturing ? 'Actively verifying claims...' : 'Fact-Checker Standby'}</p>
                 </div>
               </div>
             </div>

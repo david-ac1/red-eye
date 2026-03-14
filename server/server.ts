@@ -14,28 +14,23 @@ const PORT = 3001;
  * SENTINEL SYSTEM INSTRUCTION
  */
 const SENTINEL_SYSTEM_PROMPT = `
-Role: Lead Forensic Media Analyst specializing in Large Language Models (LLMs) and Diffusion/Transformer-based generative architectures.
+You are the Lead Contextual Fact-Checker for the "Red-Eye" Multimodal Truth Validation system.
+Objective: In an era of boundless AI content, the origin doesn't matter as much as the truth. Your mission is to perform a deep-layer audit of the attached media to identify factual inaccuracies, hallucinated scientific data, or false claims. 
 
-Objective: Perform a deep-layer audit of the attached media to identify synthetic signatures. Move beyond surface-level errors and analyze the "Statistical Signature" of the content.
+How it works: 
+1. Identify the core claims being made in the video, audio, or text. If you cannot see the screen, or the image is entirely blank or unreadable, YOU MUST explicitly state "I cannot see any content yet." DO NOT invent or hallucinate claims.
+2. YOU MUST ALWAYS use the "verify_claim_with_search" tool to cross-reference claims against the live internet. Do not rely solely on your internal knowledge.
+3. Evaluate the speaker's credentials if analyzing a "new discovery."
 
-1. Textual Forensic Dimensions:
-Syntactic Uniformity: Look for "The Great Average"—sentences of near-equal length and a rhythmic, "Subject-Verb-Object" cadence that lacks human burstiness.
-Lexical Clusters: Identify "AI-favored" transitions (e.g., Moreover, In conclusion, Ultimately, Not only... but also).
-The "False Nuance" Trope: Flag the "It’s not just X, it’s Y" or "While X is true, Y remains the priority" sentiment—a common alignment-tuning artifact used to sound balanced.
-Hedging & Politeness: Detect excessive neutrality or a refusal to take a definitive, idiosyncratic stance.
+Focus Areas:
+- Scientific Data & Claims: Flag any "data" that appears hallucinated, fabricated, or contradicts established scientific consensus.
+- Historical & Factual Accuracy: Identify incorrect dates, events, or attributions.
+- Logical Consistency: Find internal contradictions within the provided media.
 
-2. Visual (Image/Video) Forensic Dimensions:
-High-Frequency Noise Distribution: Check for "over-smoothing" in skin textures versus "fractal chaos" in complex patterns like hair, knitwear, or tree leaves.
-Coherence over Time (Video Only): Flag "Neural Morphing"—where an earring disappears for three frames or a background limb transforms into a piece of furniture during a camera pan.
-Global vs. Local Logic: Does the image look perfect locally (e.g., a hand) but fail globally (e.g., the hand has six fingers or attaches to the elbow at an impossible angle)?
+MINDSET: You are a rigorous fact-checker. Do not assume any claim is true without verification. Assume the role of a meticulous verifier.
 
-3. Auditory Forensic Dimensions:
-Spectral Flatness: Identify the lack of "micro-prosody"—the tiny, irregular shifts in pitch and volume humans use to emphasize emotion.
-Breath Management: Look for "Impossible Phrasing"—long sentences spoken without a physiological need for a breath, or breaths that occur mid-phoneme.
-Phonetic Smearing: Listen for "slurred" consonants in high-speed speech where the model struggles with the transition between complex dental or plosive sounds.
-
-Output Format (Strict JSON): so that it can better detect
-If high threat is detected, you MUST trigger the "trigger_authenticity_warning" tool.
+Output Format: Provide a concise spoken forensic breakdown of the claims.
+If you detect a hallucinated fact or a highly suspicious claim with > 60% confidence, you MUST trigger the "trigger_fact_check_warning" tool with a detailed explanation of the inaccuracy.
 `;
 
 wss.on('connection', (ws: WebSocket) => {
@@ -62,29 +57,39 @@ wss.on('connection', (ws: WebSocket) => {
             const setup = {
                 setup: {
                     model: "models/gemini-2.5-flash-native-audio-latest",
-                    generation_config: {
-                        response_modalities: ["AUDIO"],
-                        speech_config: {
-                            voice_config: {
-                                prebuilt_voice_config: {
-                                    voice_name: "Aoede"
+                    generationConfig: {
+                        responseModalities: ["AUDIO"],
+                        speechConfig: {
+                            voiceConfig: {
+                                prebuiltVoiceConfig: {
+                                    voiceName: "Aoede"
                                 }
                             }
                         }
                     },
-                    system_instruction: { parts: [{ text: SENTINEL_SYSTEM_PROMPT }] },
+                    systemInstruction: { parts: [{ text: SENTINEL_SYSTEM_PROMPT }] },
                     tools: [{
-                        function_declarations: [{
-                            name: "trigger_authenticity_warning",
-                            description: "Triggers a modal warning when synthetic content is detected with high confidence.",
+                        functionDeclarations: [{
+                            name: "trigger_fact_check_warning",
+                            description: "Triggers a modal warning when a hallucinated fact, false claim, or inaccurate data is detected with high confidence.",
                             parameters: {
                                 type: "OBJECT",
                                 properties: {
-                                    threat_type: { type: "STRING", description: "The type of threat (e.g. DEEPFAKE_VIDEO, LLM_TEXT, AUDIO_CLONE)" },
-                                    confidence: { type: "NUMBER", description: "Confidence score (0.0 to 1.0)" },
-                                    details: { type: "STRING", description: "Bullet points explaining why it was flagged." }
+                                    claim: { type: "STRING", description: "The specific claim or fact that is being flagged." },
+                                    confidence: { type: "NUMBER", description: "Confidence score (0.0 to 1.0) that the claim is false." },
+                                    details: { type: "STRING", description: "Bullet points explaining why the claim is factually incorrect or hallucinated." }
                                 },
-                                required: ["threat_type", "confidence", "details"]
+                                required: ["claim", "confidence", "details"]
+                            }
+                        }, {
+                            name: "verify_claim_with_search",
+                            description: "Uses Google Search to verify a specific claim, fact, or scientific data point against the live internet. Use this BEFORE triggering a warning.",
+                            parameters: {
+                                type: "OBJECT",
+                                properties: {
+                                    claim: { type: "STRING", description: "The specific claim to search for." }
+                                },
+                                required: ["claim"]
                             }
                         }]
                     }]
@@ -122,22 +127,56 @@ wss.on('connection', (ws: WebSocket) => {
                 }
 
                 // Handle tool calls
-                if (response.serverContent?.modelTurn?.parts?.[0]?.functionCall) {
-                    const call = response.serverContent.modelTurn.parts[0].functionCall;
-                    if (call.name === 'trigger_authenticity_warning') {
-                        console.log('[SENTINEL] AI triggered warning:', call.args);
-                        ws.send(JSON.stringify({
-                            type: 'ACTION',
-                            message: `THREAT_IDENTIFIED: ${call.args.threat_type} (${(call.args.confidence * 100).toFixed(0)}% Confidence). ${call.args.details}`
-                        }));
-                        geminiWs?.send(JSON.stringify({
-                            tool_response: {
-                                function_responses: [{
-                                    name: "trigger_authenticity_warning",
-                                    response: { status: "SUCCESS", message: "Modal displayed." }
-                                }]
+                if (response.serverContent?.modelTurn?.parts) {
+                    for (const part of response.serverContent.modelTurn.parts) {
+                        if (part.functionCall) {
+                            const call = part.functionCall;
+
+                            if (call.name === 'verify_claim_with_search') {
+                                console.log('[SENTINEL] Delegating search for claim:', call.args.claim);
+
+                                // Use the REST API as an Agentic Delegate to bypass the Bidi Visual/Search conflict
+                                const REST_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+                                fetch(REST_URL, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        contents: [{ parts: [{ text: `Verify this claim using Google Search and return a brief, definitive verdict (TRUE, FALSE, or UNVERIFIABLE) along with the factual details: "${call.args.claim}"` }] }],
+                                        tools: [{ googleSearch: {} }]
+                                    })
+                                })
+                                    .then(res => res.json())
+                                    .then(searchData => {
+                                        const searchResult = searchData.candidates?.[0]?.content?.parts?.[0]?.text || "Unable to verify claim via search.";
+                                        console.log('[SENTINEL] Search completed.');
+                                        geminiWs?.send(JSON.stringify({
+                                            tool_response: {
+                                                function_responses: [{
+                                                    name: "verify_claim_with_search",
+                                                    response: { result: searchResult }
+                                                }]
+                                            }
+                                        }));
+                                    })
+                                    .catch(err => console.error('[SENTINEL] Search Delegate Error:', err));
                             }
-                        }));
+
+                            if (call.name === 'trigger_fact_check_warning') {
+                                console.log('[SENTINEL] AI triggered fact check warning:', call.args);
+                                ws.send(JSON.stringify({
+                                    type: 'ACTION',
+                                    message: `FACT_CHECK_FAILED: "${call.args.claim}" (${(call.args.confidence * 100).toFixed(0)}% Confidence). ${call.args.details}`
+                                }));
+                                geminiWs?.send(JSON.stringify({
+                                    tool_response: {
+                                        function_responses: [{
+                                            name: "trigger_fact_check_warning",
+                                            response: { status: "SUCCESS", message: "Fact check warning displayed." }
+                                        }]
+                                    }
+                                }));
+                            }
+                        }
                     }
                 }
             } catch (err) {
@@ -186,7 +225,12 @@ wss.on('connection', (ws: WebSocket) => {
                     }
                 }));
             } else if (payload.type === 'FRAME') {
-                const base64Data = payload.data.split(',')[1];
+                const base64Data = payload.data?.split(',')[1];
+                if (!base64Data || base64Data.length < 100) {
+                    console.log(`[SERVER] Dropped corrupt/empty frame.`);
+                    return;
+                }
+                console.log(`[SERVER] Relaying FRAME (${base64Data.length} bytes)`);
                 geminiWs.send(JSON.stringify({
                     realtime_input: {
                         media_chunks: [{
